@@ -125,7 +125,10 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.1}
 /* gallery */
 .sg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .si{display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.3}
-.si img{width:100%;aspect-ratio:4/3;object-fit:contain;background:#fff;border-radius:10px;border:1px solid var(--line)}
+.si img{width:100%;aspect-ratio:4/3;object-fit:contain;background:#fff;border-radius:10px;border:1px solid var(--line);display:block}
+.siw{position:relative}
+.si.weak img{border:2px solid var(--bad)}
+.badge{position:absolute;top:6px;right:6px;background:var(--bad);color:#fff;font-family:var(--ui);font-weight:700;font-size:11px;padding:2px 7px;border-radius:999px}
 /* stats */
 .wk{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
 .wk:last-child{border-bottom:0}
@@ -291,15 +294,17 @@ function stats() {
       ${weak.length ? weak.map(id => { const q = byId[id], c = S.cards[id]; return `<div class="wk"><div class="n num">${c.wrong}×</div>${q.img ? `<img src="${IMG[q.img]}" alt="">` : ''}<div><div class="ch">${esc(chName[q.c])}</div>${esc(q.t)}<div class="ch" style="color:var(--good)">✓ ${esc(q.a[q.k - 1])}</div></div></div>`; }).join('') + (weakIds().length > 15 ? `<p class="ch" style="margin:10px 0 0;font-size:13px;color:var(--muted)">…and ${weakIds().length - 15} more. Use "Drill my mistakes" on the Study tab.</p>` : '')
         : `<div class="empty"><b>Nothing here yet</b>Every question you get wrong lands in this list, counted by how many times you missed it.</div>`}
     </div>
+    ${(() => { const m = {}; QS.filter(q => q.img && q.c >= 22 && q.c <= 31).forEach(q => { const w = (S.cards[q.id] || {}).wrong || 0; if (w) m[q.img] = (m[q.img] || 0) + w; }); const list = Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 12); if (!list.length) return ''; return `<div class="card"><div class="eyebrow" style="margin-bottom:10px">Signs you keep missing</div><div class="sg">${list.map(([img, w]) => { const q = QS.find(x => x.img === img && !/^(yes|no)\.?$/i.test(x.a[x.k - 1])) || QS.find(x => x.img === img); return `<div class="si weak"><div class="siw"><img src="${IMG[img]}" alt=""><span class="badge num">${w}×</span></div><div>${esc(q.a[q.k - 1])}</div></div>`; }).join('')}</div></div>`; })()}
     ${exams.length ? `<div class="card"><div class="eyebrow" style="margin-bottom:6px">Mock exams</div>${exams.map(e => `<div class="set"><div><label>${e.s >= 29 ? 'Passed' : 'Failed'} · <span class="num">${e.s}/30</span></label><small>${new Date(e.t).toLocaleDateString()} · ${Math.round(e.m)} min</small></div><span class="pill ${e.s >= 29 ? 'rev' : 'lapse'}">${e.s >= 29 ? 'pass' : 'fail'}</span></div>`).join('')}</div>` : ''}
   </div>`;
 }
 
+const signWrong = img => QS.filter(q => q.img === img).reduce((a, q) => a + ((S.cards[q.id] || {}).wrong || 0), 0);
 function gallery() {
   const groups = CH.filter(c => c.c >= 22 && c.c <= 31);
   const seenImg = new Set();
   return head('Sign gallery', 'Every sign in the bank with its correct meaning') + `<div class="stack">${groups.map(ch => {
-    const items = QS.filter(q => q.c === ch.c && q.img && q.t.toLowerCase().includes('sign') && !seenImg.has(q.img) && seenImg.add(q.img));
+    const items = QS.filter(q => q.c === ch.c && q.img && !/^(yes|no)\.?$/i.test(q.a[q.k - 1]) && !seenImg.has(q.img) && seenImg.add(q.img));
     if (!items.length) return '';
     return `<div class="card"><div class="eyebrow" style="margin-bottom:10px">${esc(ch.name)} · ${items.length}</div><div class="sg">${items.map(q => `<div class="si"><img src="${IMG[q.img]}" alt="" loading="lazy"><div>${esc(q.a[q.k - 1])}</div></div>`).join('')}</div></div>`;
   }).join('')}<button class="btn wide" data-act="startSigns">Quiz me on the signs</button></div>`;
