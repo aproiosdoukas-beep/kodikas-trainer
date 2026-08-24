@@ -61,6 +61,14 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.1}
 .btn:disabled{opacity:.5;cursor:default}
 .btn.wide{width:100%}
 /* home */
+.ready{display:flex;align-items:center;gap:16px}
+.gauge{width:80px;height:80px;flex:none}
+.gauge circle{fill:none;stroke-width:7}
+.gauge .gt{stroke:var(--line)}
+.gauge .gm{stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dashoffset .5s}
+.gauge text{font-family:var(--display);font-weight:700;font-size:22px;text-anchor:middle;dominant-baseline:central}
+.radv{font-family:var(--display);font-weight:600;font-size:17px;line-height:1.25;margin:2px 0 5px}
+.rstat{font-size:12px;color:var(--muted)}
 .hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .stat{padding:12px 10px;border-radius:10px;background:var(--bg);text-align:center}
 .stat b{display:block;font-family:var(--display);font-size:34px;font-weight:600;line-height:1}
@@ -81,6 +89,8 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.1}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 /* quiz */
 .qhead{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+.starbtn{font-size:20px;line-height:1;color:var(--muted);padding:2px}
+.starbtn.on{color:#F6B93B}
 .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-family:var(--ui);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent-soft);color:var(--accent)}
 .pill.new{background:var(--warn-soft);color:var(--warn)}
 .pill.lapse{background:var(--bad-soft);color:var(--bad)}
@@ -184,12 +194,15 @@ const today = () => Math.floor(Date.now() / DAY);
 const KEY = 'gdt-v1';
 let S = load();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cards) return s; } catch (e) {}
-  return { cards: {}, log: [], set: { newPerDay: 25, greek: false, shuffle: true }, exams: [] };
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cards) { if (!s.starred) s.starred = {}; return s; } } catch (e) {}
+  return { cards: {}, log: [], set: { newPerDay: 25, greek: false, shuffle: true }, exams: [], starred: {} };
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
 function card(id) { return S.cards[id] || (S.cards[id] = { ef: 2.5, iv: 0, reps: 0, due: 0, lapses: 0, seen: 0, right: 0, wrong: 0, last: 0 }); }
-function state(id) { const c = S.cards[id]; if (!c || !c.seen) return 'new'; if (c.reps === 0) return 'learning'; if (c.iv >= 21) return 'mastered'; return 'learning'; }
+// "known" = answered right at least twice in a row since the last slip (reps resets to 0 on a wrong answer).
+// This is reachable in a short cram; the old iv>=21 needed three weeks of reviews.
+function state(id) { const c = S.cards[id]; if (!c || !c.seen) return 'new'; if (c.reps >= 2) return 'known'; return 'learning'; }
+const LEECH = 3; // missed this many times = a question that keeps beating you
 
 /* ---------- SM-2 ---------- */
 function grade(id, q) { // q: 0 again, 3 hard, 4 good, 5 easy
@@ -219,7 +232,38 @@ const dueIds = () => QS.filter(q => S.cards[q.id] && S.cards[q.id].seen && S.car
 const newIds = () => QS.filter(q => !S.cards[q.id] || !S.cards[q.id].seen).map(q => q.id);
 const newDoneToday = () => S.log.filter(l => l[0] === today()).map(l => l[1]).filter((id, i, a) => a.indexOf(id) === i && card(id).seen === 1 && card(id).last === today()).length;
 const weakIds = () => QS.map(q => q.id).filter(id => S.cards[id] && (S.cards[id].wrong > 0)).sort((a, b) => (S.cards[b].wrong / (S.cards[b].seen || 1)) - (S.cards[a].wrong / (S.cards[a].seen || 1)) || S.cards[b].lapses - S.cards[a].lapses);
+const leechIds = () => weakIds().filter(id => S.cards[id].wrong >= LEECH);
+const starredIds = () => QS.map(q => q.id).filter(id => S.starred[id]);
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+// Exam readiness: honest read for a 29/30 pass mark. Weighs durable knowledge, recent mock scores,
+// and how many questions still keep beating you.
+function readiness() {
+  const known = QS.filter(q => state(q.id) === 'known').length;
+  const seen = QS.filter(q => S.cards[q.id] && S.cards[q.id].seen).length;
+  const unseen = QS.length - seen;
+  const leeches = leechIds().length;
+  const mocks = S.exams.slice(-3);
+  const avgMock = mocks.length ? mocks.reduce((a, e) => a + e.s, 0) / mocks.length : null;
+  const lastMock = S.exams.length ? S.exams[S.exams.length - 1].s : null;
+  const knownF = known / QS.length;
+  const mockF = avgMock === null ? 0 : Math.max(0, Math.min(1, (avgMock - 20) / 10)); // 20/30→0, 30/30→1
+  // Coverage dominates: you can't be ready without knowing the questions, and a fluke mock can't fake it.
+  // Mocks confirm (or dampen) what you know; unproven knowledge caps at 75%. Leeches subtract directly.
+  const mockAdj = avgMock === null ? 0.75 : 0.6 + 0.4 * mockF;
+  let pct = Math.round(100 * knownF * mockAdj) - Math.min(15, leeches);
+  pct = Math.max(0, Math.min(100, pct));
+  let tier, advice;
+  if (unseen > QS.length * 0.15) { advice = `Learn the ${unseen} questions you haven't reached yet.`; }
+  else if (leeches > 0) { advice = `Hammer the ${leeches} question${leeches > 1 ? 's' : ''} that keep beating you.`; }
+  else if (lastMock === null || lastMock < 29) { advice = 'Sit a mock exam and aim for 29 or 30.'; }
+  else { advice = 'You are passing consistently. Keep light daily reviews so nothing slips.'; }
+  const ready = unseen === 0 && leeches <= 3 && knownF >= 0.9 && mocks.length >= 2 && mocks.every(e => e.s >= 29);
+  if (ready) { tier = 'Ready'; pct = Math.max(pct, 90); }
+  else if (pct >= 55) tier = 'Getting there';
+  else tier = 'Not ready yet';
+  return { pct, tier, advice, known, seen, unseen, leeches, avgMock, lastMock, mocks: S.exams.length };
+}
 
 /* ---------- views ---------- */
 const app = document.getElementById('app');
@@ -238,10 +282,20 @@ function head(title, sub) { return `<div class="top"><div class="brand">${title}
 
 function home() {
   const due = dueIds().length, nw = newIds().length, weak = weakIds().length;
-  const m = QS.filter(q => state(q.id) === 'mastered').length, l = QS.filter(q => state(q.id) === 'learning').length;
+  const m = QS.filter(q => state(q.id) === 'known').length, l = QS.filter(q => state(q.id) === 'learning').length;
   const left = Math.max(0, S.set.newPerDay - newDoneToday());
+  const r = readiness(), leeches = r.leeches, stars = starredIds().length;
+  const C = 2 * Math.PI * 34, rc = r.pct >= 85 ? 'var(--good)' : r.pct >= 55 ? 'var(--warn)' : 'var(--bad)';
   return head('Greek Driving Theory', 'Spaced-repetition trainer for the car licence test') + `
   <div class="stack">
+    <div class="card ready">
+      <svg class="gauge" viewBox="0 0 80 80"><circle class="gt" cx="40" cy="40" r="34"/><circle class="gm" cx="40" cy="40" r="34" stroke="${rc}" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - r.pct / 100)}"/><text x="40" y="40" style="fill:${rc}">${r.pct}<tspan style="font-size:11px">%</tspan></text></svg>
+      <div class="grow">
+        <div class="eyebrow" style="color:${rc}">${r.tier}</div>
+        <div class="radv">${r.advice}</div>
+        <div class="rstat num">${r.known} known · ${r.unseen} unseen${r.lastMock !== null ? ` · last mock ${r.lastMock}/30` : ' · no mock yet'}</div>
+      </div>
+    </div>
     <div class="card stack">
       <div class="hero">
         <div class="stat due"><b class="num">${due}</b><span>due today</span></div>
@@ -249,11 +303,13 @@ function home() {
         <div class="stat weak"><b class="num">${weak}</b><span>need work</span></div>
       </div>
       <div class="bar"><i class="m" style="width:${m / 8.24}%"></i><i class="l" style="width:${l / 8.24}%"></i></div>
-      <div class="legend"><span><i style="background:var(--good)"></i>Mastered ${m}</span><span><i style="background:var(--accent)"></i>Learning ${l}</span><span><i style="background:var(--line)"></i>Unseen ${nw}</span></div>
+      <div class="legend"><span><i style="background:var(--good)"></i>Known ${m}</span><span><i style="background:var(--accent)"></i>Learning ${l}</span><span><i style="background:var(--line)"></i>Unseen ${nw}</span></div>
     </div>
     <div class="modes">
       <button class="mode" data-act="startDaily"><div class="ic">▶</div><div><b>Today's session</b><span>${due} reviews due${left && nw ? ` + ${Math.min(left, nw)} new questions` : ''}${!due && !(left && nw) ? ' · nothing due, add more new questions in Settings' : ''}</span></div></button>
-      <button class="mode" data-act="startWeak" ${weak ? '' : 'disabled'}><div class="ic bad">!</div><div><b>Drill my mistakes</b><span>${weak ? `${weak} questions you've got wrong, worst first` : 'No mistakes recorded yet'}</span></div></button>
+      ${leeches ? `<button class="mode" data-act="startLeech"><div class="ic bad">🔥</div><div><b>Questions that keep beating you</b><span>${leeches} you've missed ${LEECH}+ times. Clear these first.</span></div></button>` : ''}
+      <button class="mode" data-act="startWeak" ${weak ? '' : 'disabled'}><div class="ic warn">!</div><div><b>Drill my mistakes</b><span>${weak ? `${weak} questions you've got wrong, worst first` : 'No mistakes recorded yet'}</span></div></button>
+      ${stars ? `<button class="mode" data-act="startStarred"><div class="ic g5">★</div><div><b>Starred questions</b><span>${stars} you've flagged to revisit</span></div></button>` : ''}
       <button class="mode" data-act="startExam"><div class="ic warn">30</div><div><b>Mock exam</b><span>30 random questions, 35 minutes, only 1 mistake allowed, like the real test</span></div></button>
       <button class="mode" data-act="startSigns"><div class="ic g4">△</div><div><b>Road signs</b><span>All ${SIGN_IDS.length} sign questions in one drill, every sign type mixed</span></div></button>
       <button class="mode" data-act="go" data-v="gallery"><div class="ic g6">≡</div><div><b>Sign gallery</b><span>Flick through every sign with its meaning before you test yourself</span></div></button>
@@ -267,7 +323,7 @@ function chapters() {
   const G = ['--g1','--g2','--g3','--g4','--g5','--g6'];
   const rows = CH.map((ch, i) => {
     const ids = QS.filter(q => q.c === ch.c).map(q => q.id);
-    const m = ids.filter(id => state(id) === 'mastered').length, l = ids.filter(id => state(id) === 'learning').length;
+    const m = ids.filter(id => state(id) === 'known').length, l = ids.filter(id => state(id) === 'learning').length;
     const seen = ids.filter(id => S.cards[id] && S.cards[id].seen);
     const acc = seen.length ? seen.reduce((a, id) => a + S.cards[id].right, 0) / seen.reduce((a, id) => a + S.cards[id].seen, 0) : null;
     const due = ids.filter(id => S.cards[id] && S.cards[id].seen && S.cards[id].due <= today()).length;
@@ -365,7 +421,7 @@ function settings() {
     <div class="card stack">
       <div class="eyebrow">Backup & sync between devices</div>
       <p style="margin:0;font-size:14px;color:var(--muted)">Progress lives in this browser only. To move it to your phone, copy the code below and paste it there, then tap Restore.</p>
-      <textarea id="bk" spellcheck="false">${esc(JSON.stringify({ cards: S.cards, log: S.log, set: S.set, exams: S.exams }))}</textarea>
+      <textarea id="bk" spellcheck="false">${esc(JSON.stringify({ cards: S.cards, log: S.log, set: S.set, exams: S.exams, starred: S.starred }))}</textarea>
       <div class="row"><button class="btn sec grow" data-act="copy">Copy code</button><button class="btn sec grow" data-act="restore">Restore from code</button></div>
       <button class="btn ghost wide" data-act="reset">Erase all progress</button>
     </div>
@@ -387,11 +443,11 @@ function quiz() {
   const s = session, id = s.ids[s.i], q = byId[id];
   if (!s.order) s.order = S.set.shuffle && s.mode !== 'exam' ? shuffle(q.a.map((_, i) => i)) : q.a.map((_, i) => i);
   const c = S.cards[id]; const st = !c || !c.seen ? 'new' : c.lapses && c.reps === 0 ? 'lapse' : 'rev';
-  const label = { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[q.c], exam: 'Mock exam', signs: 'Road signs', numbers: 'Numbers drill' }[s.mode];
+  const label = { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[q.c], exam: 'Mock exam', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Keep beating you', starred: 'Starred' }[s.mode];
   const revealed = s.picked !== null;
   return `
   <div class="stack">
-    <div class="qhead"><button class="link" data-act="quit" style="font-weight:600">✕ ${esc(label)}</button>${s.mode === 'exam' ? `<span class="timer num" id="timer">35:00</span>` : `<span class="pill ${st}">${{ new: 'new', lapse: 'relearning', rev: 'review' }[st]}</span>`}<span class="num">${s.i + 1} / ${s.ids.length}</span></div>
+    <div class="qhead"><button class="link" data-act="quit" style="font-weight:600">✕ ${esc(label)}</button><span style="display:flex;align-items:center;gap:10px">${s.mode !== 'exam' ? `<button class="starbtn ${S.starred[id] ? 'on' : ''}" data-act="toggleStar" data-id="${id}" aria-label="Star this question to revisit">${S.starred[id] ? '★' : '☆'}</button>` : `<span class="timer num" id="timer">35:00</span>`}${s.mode !== 'exam' ? `<span class="pill ${st}">${{ new: 'new', lapse: 'relearning', rev: 'review' }[st]}</span>` : ''}<span class="num">${s.i + 1} / ${s.ids.length}</span></span></div>
     <div class="prog"><i style="width:${s.i / s.ids.length * 100}%"></i></div>
     <div class="card stack">
       <div class="eyebrow">${esc(chName[q.c])}</div>
@@ -412,7 +468,7 @@ function quiz() {
 function result() {
   const s = session, n = s.ids.length, pass = s.mode === 'exam' ? s.score >= 29 : null;
   const wrong = s.results.filter(r => !r[1]).map(r => byId[r[0]]);
-  return head(s.mode === 'exam' ? 'Exam result' : 'Session complete', { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[byId[s.ids[0]].c], exam: '30 questions · pass mark 29', signs: 'Road signs', numbers: 'Numbers drill' }[s.mode]) + `
+  return head(s.mode === 'exam' ? 'Exam result' : 'Session complete', { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[byId[s.ids[0]].c], exam: '30 questions · pass mark 29', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Questions that keep beating you', starred: 'Starred questions' }[s.mode]) + `
   <div class="stack">
     <div class="card result">
       <div class="big num ${pass === null ? '' : pass ? 'pass' : 'fail'}">${s.score}<span style="font-size:28px;color:var(--muted)">/${n}</span></div>
@@ -433,6 +489,9 @@ const ACT = {
     startSession(ids, 'daily');
   },
   startWeak() { startSession(weakIds().slice(0, 30), 'weak'); },
+  startLeech() { const ids = leechIds(); if (ids.length) startSession(shuffle(ids), 'leech'); },
+  startStarred() { const ids = starredIds(); if (ids.length) startSession(shuffle(ids), 'starred'); },
+  toggleStar(d) { const id = +d.id; if (S.starred[id]) delete S.starred[id]; else S.starred[id] = 1; save(); render(); },
   startSigns() { startSession(shuffle(SIGN_IDS), 'signs'); },
   startNumbers() { startSession(shuffle(NUM_IDS), 'numbers'); },
   startExam() { startSession(shuffle(QS.map(q => q.id)).slice(0, 30), 'exam'); },
@@ -455,7 +514,7 @@ const ACT = {
   setNew(d, el) { el.onchange = () => { S.set.newPerDay = Math.max(0, +el.value || 0); save(); }; },
   toggle(d) { S.set[d.k] = !S.set[d.k]; save(); render(); },
   copy() { const t = document.getElementById('bk'); t.select(); navigator.clipboard?.writeText(t.value).then(() => alert('Copied. Paste it into Settings on your other device.'), () => document.execCommand('copy')); },
-  restore() { try { const o = JSON.parse(document.getElementById('bk').value); if (!o.cards) throw 0; S = { cards: o.cards, log: o.log || [], set: { ...S.set, ...(o.set || {}) }, exams: o.exams || [] }; save(); alert('Progress restored.'); go('home'); } catch (e) { alert('That code is not valid. Paste the whole thing, exactly as copied.'); } },
+  restore() { try { const o = JSON.parse(document.getElementById('bk').value); if (!o.cards) throw 0; S = { cards: o.cards, log: o.log || [], set: { ...S.set, ...(o.set || {}) }, exams: o.exams || [], starred: o.starred || {} }; save(); alert('Progress restored.'); go('home'); } catch (e) { alert('That code is not valid. Paste the whole thing, exactly as copied.'); } },
   reset() { if (confirm('Erase all progress? This cannot be undone.')) { localStorage.removeItem(KEY); S = load(); go('home'); } },
 };
 // number input needs change handler bound at render
