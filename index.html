@@ -324,25 +324,30 @@ function signScore(q) {
   if (/^(yes|no)\.?$/i.test(a)) s -= 1;
   return s * 1000 + a.length;
 }
-const SIGN_CARDS = (() => {
+const SIGN_CARDS = [], SIGN_YESNO = [];
+(() => {
   const byimg = {};
   QS.forEach(q => { if (q.c >= 22 && q.c <= 31 && q.img) (byimg[q.img] = byimg[q.img] || []).push(q); });
-  const out = [];
   Object.entries(byimg).forEach(([img, qq]) => {
     let best = null, bs = -1;
     qq.forEach(q => { const s = signScore(q); if (s > bs) { bs = s; best = q; } });
-    // Only keep signs the bank states a positive meaning for; a yes/no answer says what the sign is NOT.
-    if (best && bs >= 0 && !/^(yes|no)\.?$/i.test(best.a[best.k - 1])) out.push({ img, c: best.c, q: best.t, a: best.a[best.k - 1] });
+    if (!best || bs < 0) return;
+    const rec = { img, c: best.c, q: best.t, a: best.a[best.k - 1] };
+    // A positive meaning goes in the main list; a yes/no answer (says what the sign is NOT) goes in a separate section.
+    (/^(yes|no)\.?$/i.test(rec.a) ? SIGN_YESNO : SIGN_CARDS).push(rec);
   });
-  return out;
 })();
+function signTile(x) {
+  const w = signWrong(x.img);
+  return `<div class="si ${w ? 'weak' : ''}"><div class="siw"><img src="${IMG[x.img]}" alt="">${w ? `<span class="badge num">${w}×</span>` : ''}</div><div class="sit"><div class="siq">${esc(x.q)}</div><div class="sia">${esc(x.a)}</div></div></div>`;
+}
 function gallery() {
   const groups = CH.filter(c => c.c >= 22 && c.c <= 31);
   return head('Sign gallery', 'Every sign with its full question and answer, so the meaning is never ambiguous') + `<div class="stack">${groups.map(ch => {
     const items = SIGN_CARDS.filter(x => x.c === ch.c);
     if (!items.length) return '';
-    return `<div class="card"><div class="eyebrow" style="margin-bottom:6px">${esc(ch.name)} · ${items.length}</div><div class="sg">${items.map(x => { const w = signWrong(x.img); return `<div class="si ${w ? 'weak' : ''}"><div class="siw"><img src="${IMG[x.img]}" alt="">${w ? `<span class="badge num">${w}×</span>` : ''}</div><div class="sit"><div class="siq">${esc(x.q)}</div><div class="sia">${esc(x.a)}</div></div></div>`; }).join('')}</div></div>`;
-  }).join('')}<button class="btn wide" data-act="startSigns">Quiz me on the signs</button></div>`;
+    return `<div class="card"><div class="eyebrow" style="margin-bottom:6px">${esc(ch.name)} · ${items.length}</div><div class="sg">${items.map(signTile).join('')}</div></div>`;
+  }).join('')}${SIGN_YESNO.length ? `<div class="card"><div class="eyebrow" style="margin-bottom:2px">Asked only as yes / no · ${SIGN_YESNO.length}</div><p style="margin:0 0 6px;font-size:13px;color:var(--muted)">The bank never states these signs' meaning directly, only a trick yes/no question. Read the question carefully.</p><div class="sg">${SIGN_YESNO.map(signTile).join('')}</div></div>` : ''}<button class="btn wide" data-act="startSigns">Quiz me on the signs</button></div>`;
 }
 
 function facts() {
