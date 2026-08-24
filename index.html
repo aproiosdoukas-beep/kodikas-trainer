@@ -331,7 +331,8 @@ const SIGN_CARDS = (() => {
   Object.entries(byimg).forEach(([img, qq]) => {
     let best = null, bs = -1;
     qq.forEach(q => { const s = signScore(q); if (s > bs) { bs = s; best = q; } });
-    if (best && bs >= 0) out.push({ img, c: best.c, q: best.t, a: best.a[best.k - 1] });
+    // Only keep signs the bank states a positive meaning for; a yes/no answer says what the sign is NOT.
+    if (best && bs >= 0 && !/^(yes|no)\.?$/i.test(best.a[best.k - 1])) out.push({ img, c: best.c, q: best.t, a: best.a[best.k - 1] });
   });
   return out;
 })();
