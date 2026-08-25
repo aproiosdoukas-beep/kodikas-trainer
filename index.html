@@ -69,6 +69,17 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.1}
 .gauge text{font-family:var(--display);font-weight:700;font-size:22px;text-anchor:middle;dominant-baseline:central}
 .radv{font-family:var(--display);font-weight:600;font-size:17px;line-height:1.25;margin:2px 0 5px}
 .rstat{font-size:12px;color:var(--muted)}
+.plan{display:flex;align-items:center;gap:14px;text-align:left;width:100%}
+.pdays{flex:none;text-align:center;min-width:56px}
+.pdays b{display:block;font-family:var(--display);font-weight:700;font-size:32px;line-height:1;color:var(--accent)}
+.pdays span{font-size:11px;color:var(--muted)}
+.prow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px}
+.pphase{font-family:var(--ui);font-weight:700;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px}
+.ph-learn{background:var(--accent-soft);color:var(--accent)} .ph-review{background:var(--warn-soft);color:var(--warn)} .ph-mock{background:var(--bad-soft);color:var(--bad)}
+.pdate{font-size:11px;color:var(--muted)}
+.ptoday{font-family:var(--display);font-weight:600;font-size:16px;line-height:1.2}
+.pnote{font-size:12px;color:var(--muted);margin-top:2px}
+.pgo{flex:none;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);font-size:15px}
 .hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .stat{padding:12px 10px;border-radius:10px;background:var(--bg);text-align:center}
 .stat b{display:block;font-family:var(--display);font-size:34px;font-weight:600;line-height:1}
@@ -188,14 +199,16 @@ const chName = Object.fromEntries(CH.map(c => [c.c, c.name]));
 const SIGN_IDS = QS.filter(q => q.c >= 22 && q.c <= 31 && q.img).map(q => q.id);
 const NUM_IDS = QS.filter(q => /\d/.test(q.a[q.k - 1]) && ![6,7,8,9,10,24].includes(q.c) && !/^vehicle/i.test(q.a[q.k - 1])).map(q => q.id);
 const DAY = 86400000;
-const today = () => Math.floor(Date.now() / DAY);
+// Local-day number, so "today" and the exam date are counted in the user's own calendar (no UTC off-by-one).
+const dayNum = ms => Math.floor((ms - new Date(ms).getTimezoneOffset() * 60000) / DAY);
+const today = () => dayNum(Date.now());
 
 /* ---------- persistence ---------- */
 const KEY = 'gdt-v1';
 let S = load();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cards) { if (!s.starred) s.starred = {}; return s; } } catch (e) {}
-  return { cards: {}, log: [], set: { newPerDay: 25, greek: false, shuffle: true }, exams: [], starred: {} };
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cards) { if (!s.starred) s.starred = {}; if (!('examDate' in s.set)) s.set.examDate = '2026-09-04'; if (!('autoPace' in s.set)) s.set.autoPace = true; return s; } } catch (e) {}
+  return { cards: {}, log: [], set: { newPerDay: 25, greek: false, shuffle: true, examDate: '2026-09-04', autoPace: true }, exams: [], starred: {} };
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
 function card(id) { return S.cards[id] || (S.cards[id] = { ef: 2.5, iv: 0, reps: 0, due: 0, lapses: 0, seen: 0, right: 0, wrong: 0, last: 0 }); }
@@ -230,6 +243,24 @@ function nextIv(id, q) { // preview for buttons
 /* ---------- queues ---------- */
 const dueIds = () => QS.filter(q => S.cards[q.id] && S.cards[q.id].seen && S.cards[q.id].due <= today()).map(q => q.id);
 const newIds = () => QS.filter(q => !S.cards[q.id] || !S.cards[q.id].seen).map(q => q.id);
+// ---- exam-date pacing ----
+function examDay() { if (!S.set.examDate) return null; const t = new Date(S.set.examDate + 'T00:00:00').getTime(); return isNaN(t) ? null : dayNum(t); }
+function daysToExam() { const e = examDay(); return e === null ? null : e - today(); }
+// How many new questions to introduce today so all unseen are learned with a 2-day review buffer before the exam.
+function plannedNew() {
+  const d = daysToExam(), unseen = newIds().length;
+  if (d === null) return S.set.newPerDay;
+  const learnDays = Math.max(1, d - 2);
+  return Math.max(0, Math.ceil(unseen / learnDays));
+}
+const newTarget = () => S.set.autoPace ? plannedNew() : S.set.newPerDay;
+// Study phase for the plan card.
+function phase() {
+  const d = daysToExam(), unseen = newIds().length;
+  if (d !== null && d <= 1) return { key: 'mock', label: 'Final mocks', note: 'Sit full mock exams and clear anything you miss.' };
+  if (unseen === 0 || (d !== null && d <= 2)) return { key: 'review', label: 'Review & drill', note: 'No new questions. Clear reviews, leeches and mocks.' };
+  return { key: 'learn', label: 'Learn', note: `Keep meeting new questions daily. Finish the bank by ${S.set.examDate ? new Date(new Date(S.set.examDate + 'T00:00:00').getTime() - 2 * DAY).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'soon'}.` };
+}
 const newDoneToday = () => S.log.filter(l => l[0] === today()).map(l => l[1]).filter((id, i, a) => a.indexOf(id) === i && card(id).seen === 1 && card(id).last === today()).length;
 const weakIds = () => QS.map(q => q.id).filter(id => S.cards[id] && (S.cards[id].wrong > 0)).sort((a, b) => (S.cards[b].wrong / (S.cards[b].seen || 1)) - (S.cards[a].wrong / (S.cards[a].seen || 1)) || S.cards[b].lapses - S.cards[a].lapses);
 const leechIds = () => weakIds().filter(id => S.cards[id].wrong >= LEECH);
@@ -283,9 +314,20 @@ function head(title, sub) { return `<div class="top"><div class="brand">${title}
 function home() {
   const due = dueIds().length, nw = newIds().length, weak = weakIds().length;
   const m = QS.filter(q => state(q.id) === 'known').length, l = QS.filter(q => state(q.id) === 'learning').length;
-  const left = Math.max(0, S.set.newPerDay - newDoneToday());
+  const left = Math.max(0, newTarget() - newDoneToday());
   const r = readiness(), leeches = r.leeches, stars = starredIds().length;
   const C = 2 * Math.PI * 34, rc = r.pct >= 85 ? 'var(--good)' : r.pct >= 55 ? 'var(--warn)' : 'var(--bad)';
+  const d = daysToExam(), ph = phase(), plan = newTarget(), doneNew = newDoneToday(), planLeft = Math.max(0, plan - doneNew);
+  const planCard = d === null ? '' : `
+    <button class="card plan" data-act="startDaily">
+      <div class="pdays"><b class="num">${d < 0 ? 0 : d}</b><span>day${d === 1 ? '' : 's'} left</span></div>
+      <div class="grow">
+        <div class="prow"><span class="pphase ph-${ph.key}">${ph.label}</span><span class="pdate">test ${S.set.examDate ? new Date(S.set.examDate + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : ''}</span></div>
+        <div class="ptoday">Today: ${due ? `${due} review${due === 1 ? '' : 's'}` : 'no reviews'}${ph.key === 'learn' ? ` + ${planLeft} new` : ''}${planLeft === 0 && due === 0 ? ' · all done, tap for extra' : ''}</div>
+        <div class="pnote">${ph.note}</div>
+      </div>
+      <div class="pgo">▶</div>
+    </button>`;
   return head('Greek Driving Theory', 'Spaced-repetition trainer for the car licence test') + `
   <div class="stack">
     <div class="card ready">
@@ -296,6 +338,7 @@ function home() {
         <div class="rstat num">${r.known} known · ${r.unseen} unseen${r.lastMock !== null ? ` · last mock ${r.lastMock}/30` : ' · no mock yet'}</div>
       </div>
     </div>
+    ${planCard}
     <div class="card stack">
       <div class="hero">
         <div class="stat due"><b class="num">${due}</b><span>due today</span></div>
@@ -414,7 +457,9 @@ function settings() {
   return head('Settings', 'Pace, language, backup') + `
   <div class="stack">
     <div class="card">
-      <div class="set"><div><label>New questions per day</label><small>Reviews are always unlimited. 25/day finishes the bank in about 5 weeks.</small></div><input type="number" min="0" max="200" value="${S.set.newPerDay}" data-act="setNew"></div>
+      <div class="set"><div><label>Exam date</label><small>${daysToExam() === null ? 'Set your test date to pace the plan.' : `${daysToExam()} day${daysToExam() === 1 ? '' : 's'} away. The daily plan works back from here.`}</small></div><input type="date" value="${S.set.examDate || ''}" data-act="setExam"></div>
+      <div class="set"><div><label>Auto-pace to exam date</label><small>${S.set.autoPace ? `Introducing ~${plannedNew()} new/day to finish learning with 2 days to spare.` : 'Off: you set new questions per day yourself.'}</small></div><button class="sw ${S.set.autoPace ? 'on' : ''}" data-act="toggle" data-k="autoPace" aria-label="Auto-pace"></button></div>
+      <div class="set" ${S.set.autoPace ? 'style="opacity:.5"' : ''}><div><label>New questions per day</label><small>${S.set.autoPace ? 'Controlled by auto-pace. Turn it off to set manually.' : 'Reviews are always unlimited.'}</small></div><input type="number" min="0" max="200" value="${S.set.newPerDay}" data-act="setNew" ${S.set.autoPace ? 'disabled' : ''}></div>
       <div class="set"><div><label>Show Greek alongside</label><small>Original Greek wording under each question and answer</small></div><button class="sw ${S.set.greek ? 'on' : ''}" data-act="toggle" data-k="greek" aria-label="Show Greek"></button></div>
       <div class="set"><div><label>Shuffle answer order</label><small>Stops you memorising positions instead of content</small></div><button class="sw ${S.set.shuffle ? 'on' : ''}" data-act="toggle" data-k="shuffle" aria-label="Shuffle"></button></div>
     </div>
@@ -483,7 +528,7 @@ function result() {
 const ACT = {
   go: d => go(d.v),
   startDaily() {
-    const left = Math.max(0, S.set.newPerDay - newDoneToday());
+    const left = Math.max(0, newTarget() - newDoneToday());
     const ids = shuffle(dueIds()).concat(newIds().slice(0, left));
     if (!ids.length) { alert('Nothing due right now. Raise "new questions per day" in Settings or practise a chapter.'); return; }
     startSession(ids, 'daily');
@@ -512,13 +557,14 @@ const ACT = {
     if (s.i >= s.ids.length) finish(); else { render(); window.scrollTo(0, 0); }
   },
   setNew(d, el) { el.onchange = () => { S.set.newPerDay = Math.max(0, +el.value || 0); save(); }; },
+  setExam(d, el) { el.onchange = () => { S.set.examDate = el.value || null; save(); render(); }; },
   toggle(d) { S.set[d.k] = !S.set[d.k]; save(); render(); },
   copy() { const t = document.getElementById('bk'); t.select(); navigator.clipboard?.writeText(t.value).then(() => alert('Copied. Paste it into Settings on your other device.'), () => document.execCommand('copy')); },
   restore() { try { const o = JSON.parse(document.getElementById('bk').value); if (!o.cards) throw 0; S = { cards: o.cards, log: o.log || [], set: { ...S.set, ...(o.set || {}) }, exams: o.exams || [], starred: o.starred || {} }; save(); alert('Progress restored.'); go('home'); } catch (e) { alert('That code is not valid. Paste the whole thing, exactly as copied.'); } },
   reset() { if (confirm('Erase all progress? This cannot be undone.')) { localStorage.removeItem(KEY); S = load(); go('home'); } },
 };
 // number input needs change handler bound at render
-const _render = render; render = function () { _render(); const n = app.querySelector('[data-act=setNew]'); if (n) n.onchange = () => { S.set.newPerDay = Math.max(0, +n.value || 0); save(); }; };
+const _render = render; render = function () { _render(); const n = app.querySelector('[data-act=setNew]'); if (n) n.onchange = () => { S.set.newPerDay = Math.max(0, +n.value || 0); save(); }; const e = app.querySelector('[data-act=setExam]'); if (e) e.onchange = () => { S.set.examDate = e.value || null; save(); render(); }; };
 render();
 </script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script></body></html>
