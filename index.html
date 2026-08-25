@@ -262,6 +262,8 @@ function phase() {
   return { key: 'learn', label: 'Learn', note: `Keep meeting new questions daily. Finish the bank by ${S.set.examDate ? new Date(new Date(S.set.examDate + 'T00:00:00').getTime() - 2 * DAY).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'soon'}.` };
 }
 const newDoneToday = () => S.log.filter(l => l[0] === today()).map(l => l[1]).filter((id, i, a) => a.indexOf(id) === i && card(id).seen === 1 && card(id).last === today()).length;
+// Every distinct question you've answered today, for a same-day redo.
+const studiedToday = () => [...new Set(S.log.filter(l => l[0] === today()).map(l => l[1]))];
 const weakIds = () => QS.map(q => q.id).filter(id => S.cards[id] && (S.cards[id].wrong > 0)).sort((a, b) => (S.cards[b].wrong / (S.cards[b].seen || 1)) - (S.cards[a].wrong / (S.cards[a].seen || 1)) || S.cards[b].lapses - S.cards[a].lapses);
 const leechIds = () => weakIds().filter(id => S.cards[id].wrong >= LEECH);
 const starredIds = () => QS.map(q => q.id).filter(id => S.starred[id]);
@@ -350,6 +352,7 @@ function home() {
     </div>
     <div class="modes">
       <button class="mode" data-act="startDaily"><div class="ic">▶</div><div><b>Today's session</b><span>${due} reviews due${left && nw ? ` + ${Math.min(left, nw)} new questions` : ''}${!due && !(left && nw) ? ' · nothing due, add more new questions in Settings' : ''}</span></div></button>
+      ${studiedToday().length ? `<button class="mode" data-act="redoToday"><div class="ic g2">↻</div><div><b>Redo today's questions</b><span>Run through the ${studiedToday().length} you've studied today again, reshuffled</span></div></button>` : ''}
       ${leeches ? `<button class="mode" data-act="startLeech"><div class="ic bad">🔥</div><div><b>Questions that keep beating you</b><span>${leeches} you've missed ${LEECH}+ times. Clear these first.</span></div></button>` : ''}
       <button class="mode" data-act="startWeak" ${weak ? '' : 'disabled'}><div class="ic warn">!</div><div><b>Drill my mistakes</b><span>${weak ? `${weak} questions you've got wrong, worst first` : 'No mistakes recorded yet'}</span></div></button>
       ${stars ? `<button class="mode" data-act="startStarred"><div class="ic g5">★</div><div><b>Starred questions</b><span>${stars} you've flagged to revisit</span></div></button>` : ''}
@@ -488,7 +491,7 @@ function quiz() {
   const s = session, id = s.ids[s.i], q = byId[id];
   if (!s.order) s.order = S.set.shuffle && s.mode !== 'exam' ? shuffle(q.a.map((_, i) => i)) : q.a.map((_, i) => i);
   const c = S.cards[id]; const st = !c || !c.seen ? 'new' : c.lapses && c.reps === 0 ? 'lapse' : 'rev';
-  const label = { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[q.c], exam: 'Mock exam', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Keep beating you', starred: 'Starred' }[s.mode];
+  const label = { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[q.c], exam: 'Mock exam', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Keep beating you', starred: 'Starred', redo: 'Redo today' }[s.mode];
   const revealed = s.picked !== null;
   return `
   <div class="stack">
@@ -513,7 +516,7 @@ function quiz() {
 function result() {
   const s = session, n = s.ids.length, pass = s.mode === 'exam' ? s.score >= 29 : null;
   const wrong = s.results.filter(r => !r[1]).map(r => byId[r[0]]);
-  return head(s.mode === 'exam' ? 'Exam result' : 'Session complete', { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[byId[s.ids[0]].c], exam: '30 questions · pass mark 29', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Questions that keep beating you', starred: 'Starred questions' }[s.mode]) + `
+  return head(s.mode === 'exam' ? 'Exam result' : 'Session complete', { daily: 'Today\'s session', weak: 'Drill mistakes', chapter: chName[byId[s.ids[0]].c], exam: '30 questions · pass mark 29', signs: 'Road signs', numbers: 'Numbers drill', leech: 'Questions that keep beating you', starred: 'Starred questions', redo: 'Redo of today\'s questions' }[s.mode]) + `
   <div class="stack">
     <div class="card result">
       <div class="big num ${pass === null ? '' : pass ? 'pass' : 'fail'}">${s.score}<span style="font-size:28px;color:var(--muted)">/${n}</span></div>
@@ -522,6 +525,7 @@ function result() {
     </div>
     ${wrong.length ? `<div class="card"><div class="eyebrow" style="margin-bottom:6px">Got wrong this time</div>${wrong.map(q => `<div class="wk"><div class="n" style="width:auto;color:var(--bad)">✕</div>${q.img ? `<img src="${IMG[q.img]}" alt="">` : ''}<div><div class="ch">${esc(chName[q.c])}</div>${esc(q.t)}<div class="ch" style="color:var(--good)">✓ ${esc(q.a[q.k - 1])}</div></div></div>`).join('')}</div>` : ''}
     <div class="row">${wrong.length ? `<button class="btn bad grow" data-act="retryWrong">Retry the ${wrong.length} wrong</button>` : ''}<button class="btn sec grow" data-act="go" data-v="home">Done</button></div>
+    ${['daily', 'redo'].includes(s.mode) && studiedToday().length ? `<button class="btn ghost wide" data-act="redoToday">↻ Redo all ${studiedToday().length} of today again</button>` : ''}
   </div>`;
 }
 
@@ -534,6 +538,7 @@ const ACT = {
     startSession(ids, 'daily');
   },
   startWeak() { startSession(weakIds().slice(0, 30), 'weak'); },
+  redoToday() { const ids = studiedToday(); if (ids.length) startSession(shuffle(ids), 'redo'); },
   startLeech() { const ids = leechIds(); if (ids.length) startSession(shuffle(ids), 'leech'); },
   startStarred() { const ids = starredIds(); if (ids.length) startSession(shuffle(ids), 'starred'); },
   toggleStar(d) { const id = +d.id; if (S.starred[id]) delete S.starred[id]; else S.starred[id] = 1; save(); render(); },
